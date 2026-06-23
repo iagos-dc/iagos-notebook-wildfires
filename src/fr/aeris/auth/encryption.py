@@ -133,14 +133,14 @@ def _generate_key_iv(password: str, salt: bytes, iterations: int = 1000) -> byte
     password_bytes = password.encode('utf-8')
 
     # First round
-    digest = hashlib.md5(password_bytes + salt).digest()
+    digest = hashlib.md5(password_bytes + salt).digest()  # NOSONAR - intentional Jasypt PBEWithMD5AndDES compatibility
 
     # Additional iterations
     for _ in range(1, iterations):
-        digest = hashlib.md5(digest).digest()
+        digest = hashlib.md5(digest).digest()  # NOSONAR - intentional Jasypt PBEWithMD5AndDES compatibility
 
     # For more key material, do another round
-    digest2 = hashlib.md5(digest + password_bytes + salt).digest()
+    digest2 = hashlib.md5(digest + password_bytes + salt).digest()  # NOSONAR - intentional Jasypt PBEWithMD5AndDES compatibility
 
     return digest + digest2
 
