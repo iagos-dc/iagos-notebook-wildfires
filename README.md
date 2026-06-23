@@ -35,13 +35,13 @@ conda activate iagos-iriscc
 IAGOS services require authentication via AERIS SSO.
 
 ```bash
-python scripts/generate_credentials.py
+python src/fr/aeris/auth/generate_credentials.py
 ```
 
 This will:
 1. Prompt for your IAGOS/AERIS email and password
 2. Prompt for a master password (used to encrypt/decrypt)
-3. Generate encrypted values to copy into `src/fr/aeris/iagos/auth/authentication.py`
+3. Generate encrypted values to copy into your `.env` file
 
 Optionally, set the master password as an environment variable to avoid being prompted each time:
 
@@ -67,11 +67,10 @@ iagos_vre/
 ├── README.md
 ├── images/
 │   └── GFED-regions.png
-├── scripts/
-│   └── generate_credentials.py
-├── src/fr/aeris/iagos/
-│   ├── auth/           # SSO authentication
-│   └── iriscc.py       # Search, download & analysis functions
+├── src/fr/aeris/
+│   ├── auth/                            # SSO authentication
+│   │   └── generate_credentials.py      # Credential encryption helper
+│   └── iriscc.py                        # Search, download & analysis functions
 ├── notebooks/
 │   └── flight_search_download_demo_IRISCC_v2.ipynb
 └── downloads/           # Downloaded data (git-ignored)
@@ -83,7 +82,7 @@ The `environment.yml` creates a conda environment `iagos-iriscc` with:
 - Data processing: xarray, netcdf4, pandas, numpy, pyarrow
 - Visualization: matplotlib
 - Authentication: python-keycloak, cryptography
-- Shared code: `fr.aeris.iagos` package (installed via `pip -e .`)
+- Shared code: `fr.aeris` package (installed via `pip -e .`)
 
 ## API Reference
 
@@ -125,7 +124,7 @@ Downloaded data (ZIP/NC4 files) is stored in `downloads/` and ignored by git.
 
 ## Troubleshooting
 
-### "No module named 'fr.aeris.iagos'"
+### "No module named 'fr.aeris'"
 
 ```bash
 pip install -e .  # From the repository root

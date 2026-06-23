@@ -12,9 +12,12 @@ dependencies:
   - cryptography
   - xarray
   - netcdf4
+  - h5netcdf
+  - h5py
   - matplotlib
   - pandas
   - numpy
   - pyarrow
+  - python-dotenv
   - pip:
     - -e .

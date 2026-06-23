@@ -11,8 +11,11 @@ Main functions:
 
 import base64
 import hashlib
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives.ciphers import Cipher, modes
+try:
+    from cryptography.hazmat.decrepit.ciphers.algorithms import TripleDES
+except ImportError:
+    from cryptography.hazmat.primitives.ciphers.algorithms import TripleDES
 
 
 # ============================================================================
@@ -54,11 +57,7 @@ def jasypt_decrypt(encrypted_text: str, password: str) -> str:
     iv = key_iv[8:16]  # DES IV is 8 bytes
 
     # Decrypt using DES
-    cipher = Cipher(
-        algorithms.TripleDES(key),
-        modes.CBC(iv),
-        backend=default_backend()
-    )
+    cipher = Cipher(TripleDES(key * 3), modes.CBC(iv))
     decryptor = cipher.decryptor()
     decrypted_padded = decryptor.update(ciphertext) + decryptor.finalize()
 
@@ -106,11 +105,7 @@ def jasypt_encrypt(plaintext: str, password: str) -> str:
     padded_plaintext = plaintext_bytes + bytes([padding_length] * padding_length)
 
     # Encrypt using DES
-    cipher = Cipher(
-        algorithms.TripleDES(key),
-        modes.CBC(iv),
-        backend=default_backend()
-    )
+    cipher = Cipher(TripleDES(key * 3), modes.CBC(iv))
     encryptor = cipher.encryptor()
     ciphertext = encryptor.update(padded_plaintext) + encryptor.finalize()
 

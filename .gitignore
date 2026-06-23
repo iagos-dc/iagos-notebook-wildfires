@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+dist/
+build/
+*.so
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Conda
+.conda/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Distribution / packaging
+*.whl
+MANIFEST
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Downloads
+downloads/
+
+# Credentials & secrets
+credentials.json
+*.enc
+.env
+.env.*
+!.env.example
+secrets.*

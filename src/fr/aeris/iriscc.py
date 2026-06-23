@@ -262,6 +262,136 @@ def split_large_dataset(base_url, auth_headers, start, end, bbox, level, region=
     return left_periods + right_periods
 
 
+def _build_l2_index(zip_l2_path):
+    """Index L2 files by (flight_id, phase) for O(1) lookup."""
+    index = {}
+    with zipfile.ZipFile(zip_l2_path, 'r') as z2:
+        for fname in z2.namelist():
+            m = re.search(r'IAGOS_(?:profile|timeseries)_(\d+)_L2_[\d.]+-?(ascent|descent)?\.nc4', fname)
+            if m:
+                index[(m.group(1), m.group(2))] = fname
+    return index
+
+
+def _detect_species(ds):
+    """Return a set of chemical species names present in a dataset."""
+    species = set()
+    for var in ds.data_vars:
+        if var.startswith('O3_') or var == 'O3':
+            species.add('O3')
+        elif var.startswith('CO2_') or var == 'CO2':
+            species.add('CO2')
+        elif var.startswith('CH4_') or var == 'CH4':
+            species.add('CH4')
+        elif re.match(r'^NO[A-Za-z0-9]*(_|$)', var):
+            m = re.match(r'^(NO[A-Za-z0-9]*?)(_|$)', var)
+            if m:
+                species.add(m.group(1))
+    return species
+
+
+def _extract_co_stats(ds, co_avail):
+    """
+    Compute CO statistics from a dataset.
+    Returns (stats_dict, has_valid) where stats_dict contains max/mean/median/p25/p75/alt_max.
+    """
+    co_data = ds['CO_P1'].values.astype(float)
+    valid = co_data[~np.isnan(co_data)]
+    if len(valid) == 0:
+        return None, False
+
+    alt_max_co = 0.0
+    if 'baro_alt_AC' in ds:
+        alt_data = ds['baro_alt_AC'].values.astype(float)
+        alt_max_co = float(alt_data[np.nanargmax(co_data)])
+
+    return {
+        'co_availability': co_avail,
+        'max_co': float(np.max(valid)),
+        'mean_co': float(np.mean(valid)),
+        'median_co': float(np.median(valid)),
+        'p25_co': float(np.percentile(valid, 25)),
+        'p75_co': float(np.percentile(valid, 75)),
+        'alt_max_co': alt_max_co,
+    }, True
+
+
+def _read_co_from_l2(z2, l2_fname, flight_id):
+    """Try to extract CO stats from L2. Returns (stats, has_valid)."""
+    try:
+        with z2.open(l2_fname) as f:
+            ds = xr.open_dataset(io.BytesIO(f.read()))
+        try:
+            if 'CO_P1' not in ds:
+                return None, False
+            co_avail = ds['CO_P1'].attrs.get('availability', None)
+            if not co_avail:
+                return None, False
+            return _extract_co_stats(ds, co_avail)
+        finally:
+            ds.close()
+    except Exception as e:
+        print(f"  Error reading L2 for {flight_id}: {e}")
+        return None, False
+
+
+def _read_co_from_l1(ds_l1, l1_co_avail, l1_fname):
+    """Extract CO stats from an already-open L1 dataset. Returns (stats, has_valid)."""
+    try:
+        return _extract_co_stats(ds_l1, l1_co_avail)
+    except Exception as e:
+        print(f"  Error reading CO from L1 {l1_fname}: {e}")
+        return None, False
+
+
+def _process_flight(z2, z1, l1_fname, flight_id, phase, l2_index):
+    """
+    Process a single L1 file and return a flight result dict, or None if no valid CO.
+    Also returns the source label ("L1", "L2") and whether CO was found.
+    Returns (result_dict_or_None, source_or_None).
+    """
+    try:
+        with z1.open(l1_fname) as f:
+            ds_l1 = xr.open_dataset(io.BytesIO(f.read()))
+    except Exception as e:
+        print(f"  Error opening L1 {l1_fname}: {e}")
+        return None, None
+
+    try:
+        l1_co_avail = ds_l1['CO_P1'].attrs.get('availability', None) if 'CO_P1' in ds_l1 else None
+        if not l1_co_avail:
+            return None, None
+
+        flight_key = (flight_id, phase)
+        stats, source = None, None
+
+        if flight_key in l2_index:
+            stats, has_valid = _read_co_from_l2(z2, l2_index[flight_key], flight_id)
+            if has_valid:
+                source = "L2"
+
+        if source is None:
+            stats, has_valid = _read_co_from_l1(ds_l1, l1_co_avail, l1_fname)
+            if has_valid:
+                source = "L1"
+
+        if source is None:
+            return None, None
+
+        return {
+            'flight_id': flight_id,
+            'phase': phase or 'N/A',
+            'airport': ds_l1.attrs.get('airport', 'N/A'),
+            **stats,
+            'source': source,
+            'l1_filename': l1_fname,
+            'l2_filename': l2_index.get(flight_key),
+            'other_species': ', '.join(sorted(_detect_species(ds_l1))),
+        }, source
+    finally:
+        ds_l1.close()
+
+
 def rank_flights_by_co(zip_l2_path, zip_l1_path):
     """
     Analyze flights for valid CO_P1 data. Iterates over L1 files (the complete set).
@@ -280,161 +410,40 @@ def rank_flights_by_co(zip_l2_path, zip_l1_path):
               flight_id, phase, max_co, mean_co, median_co, p25_co, p75_co,
               airport, source ("L1" or "L2"), l1_filename, other_species
     """
-    results = []
-
-    # Build an index of L2 files by (flight_id, phase) for quick lookup
-    l2_index = {}
-    with zipfile.ZipFile(zip_l2_path, 'r') as z2:
-        for fname in z2.namelist():
-            match = re.search(
-                r'IAGOS_(?:profile|timeseries)_(\d+)_L2_[\d.]+-?(ascent|descent)?\.nc4', fname
-            )
-            if match:
-                key = (match.group(1), match.group(2))
-                l2_index[key] = fname
-
+    l2_index = _build_l2_index(zip_l2_path)
     print(f"L2 index built: {len(l2_index)} files indexed")
 
-    # Open both ZIPs once for the entire analysis
+    results = []
+    l2_with_co = l1_with_co = no_co = 0
+    l1_pattern = re.compile(r'IAGOS_(?:profile|timeseries)_(\d+)_L1_[\d.]+-?(ascent|descent)?\.nc4')
+
     with zipfile.ZipFile(zip_l2_path, 'r') as z2, zipfile.ZipFile(zip_l1_path, 'r') as z1:
         l1_files = z1.namelist()
         total = len(l1_files)
         print(f"Analyzing {total} L1 files for CO data...\n")
 
-        l2_with_co = 0
-        l1_with_co = 0
-        no_co = 0
-
         for idx, l1_fname in enumerate(l1_files):
-            match = re.search(
-                r'IAGOS_(?:profile|timeseries)_(\d+)_L1_[\d.]+-?(ascent|descent)?\.nc4', l1_fname
-            )
-            if not match:
+            m = l1_pattern.search(l1_fname)
+            if not m:
                 continue
 
-            flight_id = match.group(1)
-            phase = match.group(2)
-            flight_key = (flight_id, phase)
+            result, source = _process_flight(z2, z1, l1_fname, m.group(1), m.group(2), l2_index)
 
-            # Step 1: Open L1 and check CO availability (quick metadata read)
-            try:
-                with z1.open(l1_fname) as f:
-                    ds_l1 = xr.open_dataset(io.BytesIO(f.read()))
-            except Exception as e:
-                print(f"  Error opening L1 {l1_fname}: {e}")
-                continue
-
-            l1_co_avail = None
-            if 'CO_P1' in ds_l1:
-                l1_co_avail = ds_l1['CO_P1'].attrs.get('availability', None)
-
-            # If L1 has no CO data, skip entirely (no need to open L2 or read metadata)
-            if l1_co_avail is None or l1_co_avail == 0:
-                ds_l1.close()
+            if result is None:
                 no_co += 1
-                continue
-
-            # Step 2: L1 has CO — extract airport and species
-            airport = ds_l1.attrs.get('airport', 'N/A')
-
-            species_found = set()
-            for var_name in ds_l1.data_vars:
-                if var_name.startswith('O3_') or var_name == 'O3':
-                    species_found.add('O3')
-                elif var_name.startswith('CO2_') or var_name == 'CO2':
-                    species_found.add('CO2')
-                elif var_name.startswith('CH4_') or var_name == 'CH4':
-                    species_found.add('CH4')
-                elif re.match(r'^NO[A-Za-z0-9]*(_|$)', var_name):
-                    match_no = re.match(r'^(NO[A-Za-z0-9]*?)(_|$)', var_name)
-                    if match_no:
-                        species_found.add(match_no.group(1))
-
-            # Step 3: Try L2 first (preferred, validated data)
-            has_valid_co = False
-            source = None
-            co_availability = None
-            max_co = mean_co = median_co = p25_co = p75_co = alt_max_co = 0.0
-
-            if flight_key in l2_index:
-                l2_fname = l2_index[flight_key]
-                try:
-                    with z2.open(l2_fname) as f:
-                        ds = xr.open_dataset(io.BytesIO(f.read()))
-
-                    if 'CO_P1' in ds:
-                        co_avail_l2 = ds['CO_P1'].attrs.get('availability', None)
-                        if co_avail_l2 is not None and co_avail_l2 > 0:
-                            co_data = ds['CO_P1'].values.astype(float)
-                            valid = co_data[~np.isnan(co_data)]
-                            if len(valid) > 0:
-                                has_valid_co = True
-                                co_availability = co_avail_l2
-                                max_co = float(np.max(valid))
-                                mean_co = float(np.mean(valid))
-                                median_co = float(np.median(valid))
-                                p25_co = float(np.percentile(valid, 25))
-                                p75_co = float(np.percentile(valid, 75))
-                                if 'baro_alt_AC' in ds:
-                                    alt_data = ds['baro_alt_AC'].values.astype(float)
-                                    alt_max_co = float(alt_data[np.nanargmax(co_data)])
-                                source = "L2"
-                                l2_with_co += 1
-
-                    ds.close()
-                except Exception as e:
-                    print(f"  Error reading L2 for {flight_id}: {e}")
-
-            # Step 4: Fall back to L1 if L2 had no valid CO
-            if not has_valid_co:
-                try:
-                    co_data = ds_l1['CO_P1'].values.astype(float)
-                    valid = co_data[~np.isnan(co_data)]
-                    if len(valid) > 0:
-                        has_valid_co = True
-                        co_availability = l1_co_avail
-                        max_co = float(np.max(valid))
-                        mean_co = float(np.mean(valid))
-                        median_co = float(np.median(valid))
-                        p25_co = float(np.percentile(valid, 25))
-                        p75_co = float(np.percentile(valid, 75))
-                        if 'baro_alt_AC' in ds_l1:
-                            alt_data = ds_l1['baro_alt_AC'].values.astype(float)
-                            alt_max_co = float(alt_data[np.nanargmax(co_data)])
-                        source = "L1"
-                        l1_with_co += 1
-                except Exception as e:
-                    print(f"  Error reading CO from L1 {l1_fname}: {e}")
-
-            ds_l1.close()
-
-            if has_valid_co:
-                results.append({
-                    'flight_id': flight_id,
-                    'phase': phase or 'N/A',
-                    'airport': airport,
-                    'max_co': max_co,
-                    'alt_max_co': alt_max_co,
-                    'mean_co': mean_co,
-                    'median_co': median_co,
-                    'p25_co': p25_co,
-                    'p75_co': p75_co,
-                    'co_availability': co_availability,
-                    'source': source,
-                    'l1_filename': l1_fname,
-                    'l2_filename': l2_index.get(flight_key),
-                    'other_species': ', '.join(sorted(species_found))
-                })
+            elif source == "L2":
+                results.append(result)
+                l2_with_co += 1
             else:
-                no_co += 1
+                results.append(result)
+                l1_with_co += 1
 
             if (idx + 1) % 100 == 0:
                 print(f"  Processed {idx + 1}/{total} files...")
 
-    # Sort by max CO descending
     results.sort(key=lambda x: x['max_co'], reverse=True)
 
-    print(f"\nAnalysis complete:")
+    print("\nAnalysis complete:")
     print(f"  CO from L2 (validated): {l2_with_co}")
     print(f"  CO from L1 (raw): {l1_with_co}")
     print(f"  No CO data: {no_co}")
