@@ -1,0 +1,6 @@
+{
+    "sonarlint.connectedMode.project": {
+        "connectionId": "iagos-dc",
+        "projectKey": "iagos-dc_iagos-notebook-wildfires"
+    }
+}
