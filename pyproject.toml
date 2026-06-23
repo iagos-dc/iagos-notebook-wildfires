@@ -7,7 +7,7 @@ name = "fr.aeris"
 version = "0.1.0"
 description = "IAGOS Flight Search & Download Notebooks with SSO Authentication"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.8.1"
 dependencies = [
     "requests>=2.31.0",
     "python-keycloak>=3.0.0",

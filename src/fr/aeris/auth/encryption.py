@@ -57,7 +57,7 @@ def jasypt_decrypt(encrypted_text: str, password: str) -> str:
     iv = key_iv[8:16]  # DES IV is 8 bytes
 
     # Decrypt using DES
-    cipher = Cipher(TripleDES(key * 3), modes.CBC(iv))
+    cipher = Cipher(TripleDES(key * 3), modes.CBC(iv))  # NOSONAR - intentional Jasypt PBEWithMD5AndDES compatibility
     decryptor = cipher.decryptor()
     decrypted_padded = decryptor.update(ciphertext) + decryptor.finalize()
 
@@ -97,7 +97,7 @@ def jasypt_encrypt(plaintext: str, password: str) -> str:
     # Generate key and IV using MD5 (Jasypt compatible)
     key_iv = _generate_key_iv(password, salt)
     key = key_iv[:8]  # DES key is 8 bytes
-    iv = key_iv[8:16]  # DES IV is 8 bytes
+    iv = key_iv[8:16]  
 
     # Add PKCS5 padding
     plaintext_bytes = plaintext.encode('utf-8')
@@ -105,8 +105,8 @@ def jasypt_encrypt(plaintext: str, password: str) -> str:
     padded_plaintext = plaintext_bytes + bytes([padding_length] * padding_length)
 
     # Encrypt using DES
-    cipher = Cipher(TripleDES(key * 3), modes.CBC(iv))
-    encryptor = cipher.encryptor()
+    cipher = Cipher(TripleDES(key * 3), modes.CBC(iv))  # NOSONAR - intentional Jasypt PBEWithMD5AndDES compatibility
+    encryptor = cipher.encryptor()  # NOSONAR - IV derived from password+salt per Jasypt PBEWithMD5AndDES spec
     ciphertext = encryptor.update(padded_plaintext) + encryptor.finalize()
 
     # Combine salt and ciphertext, then encode to base64
